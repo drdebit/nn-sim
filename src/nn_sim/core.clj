@@ -90,6 +90,7 @@
 ;;   (assoc mkt :history
 ;;          (conj (pop (:history mkt))
 ;;                (assoc (last (:history mkt)) :offer/accepted? true))))
+;; Thanks Ying!
 
 (defn -main
   "I don't do a whole lot ... yet."
