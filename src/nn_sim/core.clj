@@ -7,6 +7,7 @@
 
 (def n 20)
 (def periods 30)
+(def highprior 0.8)
 (def prob 0.2)
 (def off-prob 0.2)
 (def states [40 80])
@@ -20,7 +21,7 @@
 (spec/def :nn/offer (spec/keys :req [:offer/investor :offer/type :offer/price]
                                :opt [:offer/accepted?]))
 
-(spec/def :investor/risk-parameter (spec/and float? #(> % 0)))
+(spec/def :investor/risk-parameter (spec/and integer? #(> % 0))) ;; restricted to integer because floats were producing NaNs
 
 (defn search-history
   ([history price offer-type compar]
@@ -55,13 +56,29 @@
      :pub-signal (signal-vec-fn) ;; this doesn't work yet. need cond. probs. from Panel D in Table 1.
      :pri-signal (signal-vec-fn)}))
 
-(defn utility [rp w]
-  (Math/pow (- (Math/E)) (* (- rp) w)))
+(defn update-prior [investor signal]
+  (if-let [prior (:prior investor)]
+    prior
+    highprior))
 
-(defn trader [i]
+(defn utility
+  ([rp w]
+   (Math/pow (- (Math/E)) (* (- rp) w)))
+  ([rp wl wh ph]
+   (+ (* (- 1 ph) (utility rp wl)) (* ph (utility rp wh)))))
+
+;; (defn value [phigh]
+;;   (let [[ls hs] (sort states)]
+;;     (+ (* (- 1 phigh) ls) (* phigh hs))))
+
+(defn investor [i]
   {:index i
    :risk (gen/generate (spec/gen :investor/risk-parameter))
    :wealth 0})
+
+(defn- current-bid-ask
+  [mkt]
+  (map (fn [k d] (or (k mkt) d)) [:bid :ask] [0 top-offer]))
 
 (defn offer
   ([]
@@ -72,6 +89,25 @@
     :offer/price price})
   ([^Integer investor ^clojure.lang.Keyword type ^Integer price ^Boolean accepted?]
    (conj (offer investor type price) {:accepted? accepted?})))
+
+;; Instead of the mkt checking offers to add, have the investors restrict their decision space to only the space between bid and ask.
+;; Thanks Ying!
+
+(defn top-choice [investor mkt]
+  (let [[bid ask] (current-bid-ask mkt)
+        [ls hs] (sort states)
+        fns {:buy (fn [value o] (- value o))
+             :sell (fn [value o] (- o value))}
+        profits (apply into (mapv (fn [[k f]]
+                                 (mapv (fn [o] [k
+                                                o
+                                                (utility (:risk investor)
+                                                         (f ls o)
+                                                         (f hs o)
+                                                         (or (:prior investor) highprior))])
+                                       (range bid ask)))
+                               fns))]
+    profits #_(first (reverse (sort-by #(val %) profits)))))
 
 (defn add-offer
   "Add offer to history unless there is an outstanding bid/ask and the outstanding bid/ask is higher/lower than the offer price."
@@ -85,16 +121,16 @@
       :else (conj mkt {type offer-price
                        :history (conj history (offer type offer-price false))}))))
 
-;; Instead of the mkt accepting offers, have the investors restrict their decision space to only the space between bid and ask.
-;; (defn accept-offer [mkt]
-;;   (assoc mkt :history
-;;          (conj (pop (:history mkt))
-;;                (assoc (last (:history mkt)) :offer/accepted? true))))
-;; Thanks Ying!
+
+(defn accept-offer [mkt]
+  (assoc mkt :history
+         (conj (pop (:history mkt))
+               (assoc (last (:history mkt)) :offer/accepted? true))))
+
 
 (defn -main
   "I don't do a whole lot ... yet."
   [& args]
   (let [mkt {:history (vec (take periods (repeatedly #(offer))))
-             :investors (mapv trader (range n))}]
+             :investors (mapv investor (range n))}]
     mkt))
